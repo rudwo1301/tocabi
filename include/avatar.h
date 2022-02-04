@@ -1152,6 +1152,8 @@ private:
 /////////////////////////////////////////////MJ CustomCuntroller//////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 public:
+    //////////////////////////////// econom2
+    double com_y_desired_;
     //////////////////////////////// Myeong-Ju
     void circling_motion();
     void computeIkControl_MJ(Eigen::Isometry3d float_trunk_transform, Eigen::Isometry3d float_lleg_transform, Eigen::Isometry3d float_rleg_transform, Eigen::Vector12d& desired_leg_q);
@@ -1235,7 +1237,10 @@ public:
     Eigen::Vector3d com_float_init_;
     Eigen::Vector3d com_float_current_;
     Eigen::Vector3d com_support_current_;
+    Eigen::Vector3d com_support_current_b_;
+
     Eigen::Vector3d com_support_current_dot_;
+    Eigen::Vector3d com_support_current_dot_e_;
     Eigen::Vector3d com_support_current_LPF;
     Eigen::Vector3d com_float_current_LPF;
     Eigen::Vector3d com_support_current_prev;

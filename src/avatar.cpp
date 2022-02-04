@@ -2,15 +2,7 @@
 #include <fstream>
 using namespace TOCABI;
 
-// ofstream MJ_graph("/home/dyros/data/myeongju/MJ_graph.txt");
-// ofstream MJ_graph1("/home/dyros/data/myeongju/MJ_graph1.txt");
-// ofstream MJ_joint1("/home/dyros/data/myeongju/MJ_joint1.txt");
-// ofstream MJ_joint2("/home/dyros/data/myeongju/MJ_joint2.txt");
-
-// ofstream MJ_graph("/home/dyros_rm/MJ/data/myeongju/MJ_graph.txt");
-// ofstream MJ_graph1("/home/dyros_rm/MJ/data/myeongju/MJ_graph1.txt");
-// ofstream MJ_joint1("/home/dyros_rm/MJ/data/myeongju/MJ_joint1.txt");
-// ofstream MJ_joint2("/home/dyros_rm/MJ/data/myeongju/MJ_joint2.txt");
+ofstream e_graph("/home/econom2-18/Desktop/data/e_graph.txt");
 
 AvatarController::AvatarController(RobotData &rd) : rd_(rd)
 {
@@ -720,14 +712,38 @@ void AvatarController::computeSlow()
                     }
                 }
                 
-                // if( walking_tick_mj%10 == 0)
-                // {
-                //     cout<<"walking_tick_mj: "<<walking_tick_mj<<endl;
-                // }
-                
-                // cout<<"current_step_num: "<<current_step_num_<<endl;
-                // cout<<"com_desired_(0): "<<com_desired_(0)<<endl;
-                // cout<<"com_desired_(1): "<<com_desired_(1)<<endl;
+                if(walking_tick_mj == 0)
+                {
+                    Eigen::MatrixXd lambda_inv;
+                    lambda_inv.resize(6,6);
+                    lambda_inv = jac_rfoot_*rd_.A_*jac_rfoot_.transpose();
+                    Eigen::MatrixXd lambda_;
+                    lambda_.resize(6,6);
+                    lambda_ = lambda_inv.inverse();
+
+                    Eigen::MatrixXd jac_rfoot_bar_;
+                    jac_rfoot_bar_.resize(6,MODEL_DOF_VIRTUAL);
+                    jac_rfoot_bar_ = rd_.A_*jac_rfoot_*jac_rfoot_;
+
+                    Eigen::MatrixXd P_contact_;
+                    P_contact_.resize(MODEL_DOF_VIRTUAL, MODEL_DOF_VIRTUAL);
+                    P_contact_ = jac_rfoot_.transpose()*jac_rfoot_bar_.transpose();
+
+                    Eigen::MatrixXd identity_calc_;
+                    identity_calc_.resize(MODEL_DOF_VIRTUAL, MODEL_DOF_VIRTUAL);
+                    identity_calc_.setIdentity();
+
+                    Eigen::MatrixXd Selection_mat_;
+                    Selection_mat_.resize(6,MODEL_DOF_VIRTUAL);
+                    Selection_mat_.setZero();
+                    Selection_mat_.block<6,6>(0,0).setIdentity();
+                    
+                    Eigen::MatrixXd S_m_mat_;
+                    S_m_mat_.resize(6,6);
+                    S_m_mat_ = Selection_mat_*rd_.A_.inverse()*(identity_calc_ - P_contact_)*Selection_mat_.transpose();
+
+                    e_graph <<  lambda_ << endl << endl << jac_rfoot_bar_ << endl << endl << P_contact_ << endl << endl << Selection_mat_ << endl << endl << S_m_mat_ << endl;
+                }
 
                 CP_compen_MJ();
                 CP_compen_MJ_FT();
@@ -807,6 +823,7 @@ void AvatarController::computeSlow()
         rd_.torque_desired = torque_lower_ + torque_upper_;
         /////////////////////////////////////////////////////////////////////////////// 
     }
+    /*
     else if (rd_.tc_.mode == 12)
     {
         if (initial_flag == 0)
@@ -1070,9 +1087,111 @@ void AvatarController::computeSlow()
 
             
         // printOutTextFile();
-    }
+    }*/
     else if (rd_.tc_.mode == 14)
     {
+        //econom2 working
+        if (walking_enable_ == true)
+        {
+            if (walking_tick_mj == 0)
+            {
+                parameterSetting();
+                initial_flag = 0;
+
+                atb_grav_update_ = false;
+                atb_upper_update_ = false;
+                torque_upper_fast_.setZero();
+                torque_upper_fast_.segment(12, MODEL_DOF - 12) = rd_.torque_desired.segment(12, MODEL_DOF - 12);
+                torque_upper_.setZero();
+                torque_upper_.segment(12, MODEL_DOF - 12) = rd_.torque_desired.segment(12, MODEL_DOF - 12);
+
+                cout << "parameter setting OK" << endl;
+                cout << "14 econom2" << endl;
+            }
+            cout << walking_tick_mj << endl;
+            std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
+            updateInitialState();   
+            std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
+            getRobotState();     
+
+            int task_dof = 6; int task_num = 1;// com, l hand, r hand
+            rd_.J_task.setZero(task_dof*task_num, MODEL_DOF_VIRTUAL);
+            for (int i = 0; i <task_dof*task_num; i++)
+            {
+                if(i < task_dof)
+                {
+                    for (int j = 0; j< MODEL_DOF_VIRTUAL; j++)
+                    {
+                        rd_.J_task(i,j) = static_cast<double>(rd_.link_[COM_id].jac(i,j));
+                    }
+                }
+            }//Control COM trajectory
+             
+            rd_.I_C.setIdentity(rd_.contact_index * 6, rd_.contact_index * 6);
+            rd_.Lambda_c = (rd_.J_C * rd_.A_inv_ * rd_.J_C.transpose()).inverse();
+            rd_.J_C_INV_T = rd_.Lambda_c * rd_.J_C * rd_.A_inv_;
+            rd_.N_C = MatrixVVd::Identity() - rd_.J_C.transpose() * rd_.J_C_INV_T;
+            rd_.J_task_T = rd_.J_task.transpose();
+            rd_.lambda = (rd_.J_task * rd_.A_inv_ * rd_.N_C * rd_.J_task_T).inverse();
+
+            double duration = 3.0;
+            com_desired_ = com_support_init_;
+            //com_desired_(1) = DyrosMath::cubic(walking_tick_mj, duration*hz_, 2*duration*hz_, com_support_init_(1), 0.0, 0.0, 0.0);
+            Vector3d com_desired_dot_; //com_desired_dot_.setZero();
+
+            Matrix3d com_rot_desired_; com_rot_desired_.setIdentity();
+            Vector3d tmp_del_rot = DyrosMath::getPhi(pelv_float_current_.rotation(),pelv_float_init_.rotation());
+            
+            double kp = 100, kv = 10;
+            Vector6d f_star;
+            f_star << -kp*(com_support_current_ - com_desired_) - kv*com_float_current_dot_LPF, -kp*(tmp_del_rot) - kv*rd_.link_[COM_id].w;
+
+            VectorQd gravity_torque;
+            gravity_torque = WBC::GravityCompensationTorque(rd_);
+            VectorQd task_torque;
+            task_torque = WBC::TaskControlTorque(rd_, f_star);
+
+            e_graph << com_support_current_(0) << "," << com_support_current_(1) << "," << com_support_current_(2) << endl;
+            for (int i = 0; i < MODEL_DOF; i++)
+            {
+                //rd_.torque_desired(i) = Kp(i) * (ref_q_(i) - rd_.q_(i)) - Kd(i) * rd_.q_dot_(i) + 1.0 * Gravity_MJ_fast_(i);
+                rd_.torque_desired(i) = gravity_torque(i) + task_torque(i);
+            }
+            updateNextStepTime();
+        }
+
+        // //CoM pos & pelv orientation control
+        // wbc_.SetContact(rd_, 1, 1);
+
+        // int task_number = 6;	//CoM is not controlled in z direction
+        // rd_.J_task.setZero(task_number, MODEL_DOF_VIRTUAL);
+        // rd_.f_star.setZero(task_number);
+
+        // rd_.J_task = rd_.link_[COM_id].jac;
+        // //rd_.J_task.block(2, 0, 1, MODEL_DOF_VIRTUAL) = rd_.link_[Pelvis].jac.block(2, 0, 1, MODEL_DOF_VIRTUAL);
+
+        // // rd_.J_task.block(2, 0, 3, MODEL_DOF_VIRTUAL) = rd_.link_[COM_id].jac.block(3, 0, 3, MODEL_DOF_VIRTUAL);
+
+        // rd_.link_[COM_id].x_desired = tc.ratio * rd_.link_[Left_Foot].xpos + (1.0 - tc.ratio) * rd_.link_[Right_Foot].xpos;
+        // rd_.link_[COM_id].x_desired(2) = tc.height;
+        // rd_.link_[COM_id].Set_Trajectory_from_quintic(rd_.control_time_, tc.command_time, tc.command_time + 3);
+
+        // rd_.link_[COM_id].rot_desired = Matrix3d::Identity();
+        // // rd_.link_[COM_id].rot_desired = pelv_yaw_rot_current_from_global_mj_;
+        // rd_.link_[COM_id].Set_Trajectory_rotation(rd_.control_time_, tc.command_time, tc.command_time + 3, false);
+
+        // rd_.f_star = wbc_.getfstar6d(rd_, COM_id);
+        // // rd_.f_star.segment(0, 2) = wbc_.getfstar6d(rd_, COM_id).segment(0, 2);
+        // // rd_.f_star.segment(2, 3) = wbc_.getfstar6d(rd_, COM_id).segment(3, 3);
+        // //tocabi_.f_star.segment(0, 2) = wbc_.fstar_regulation(tocabi_, tocabi_.f_star.segment(0, 3));
+        // //torque_task = wbc_.task_control_torque(tocabi_, tocabi_.J_task, tocabi_.f_star, tc.solver);
+        // Eigen::VectorQd torque_com_control;
+        // torque_com_control = wbc_.task_control_torque_with_gravity(rd_, rd_.J_task, rd_.f_star);
+        // rd_.contact_redistribution_mode = 0;
+
+        // torque_task_.segment(0, 12) = torque_com_control.segment(0, 12);
+        // torque_task_(3) = (kp_joint_(3) * (desired_q_(3) - current_q_(3)) + kv_joint_(3) * (desired_q_dot_(3) - current_q_dot_(3)));
+        // torque_task_(9) = (kp_joint_(9) * (desired_q_(9) - current_q_(9)) + kv_joint_(9) * (desired_q_dot_(9) - current_q_dot_(9)));
     }
 }
 
@@ -10651,7 +10770,11 @@ void AvatarController::getRobotState()
     // rfoot_support_current_ = DyrosMath::inverseIsometry3d(supportfoot_float_current_) * rfoot_float_current_;
 
     //cout << "L : " << lfoot_float_current_.linear() << "\n" <<  "R : " << rfoot_float_current_.linear() << endl;
+    
+    com_support_current_b_ = com_support_current_;
     com_support_current_ = DyrosMath::multiplyIsometry3dVector3d(DyrosMath::inverseIsometry3d(supportfoot_float_current_yaw_only), com_float_current_);
+    com_support_current_dot_e_ = com_support_current_ - com_support_current_b_;
+
     com_support_current_dot_ = DyrosMath::multiplyIsometry3dVector3d(DyrosMath::inverseIsometry3d(supportfoot_float_current_yaw_only), com_float_current_dot);
     com_support_current_dot_LPF = DyrosMath::multiplyIsometry3dVector3d(DyrosMath::inverseIsometry3d(supportfoot_float_current_yaw_only), com_float_current_dot_LPF);
 
@@ -12557,7 +12680,7 @@ void AvatarController::updateNextStepTime()
             t_start_ = t_last_ + 1;
             t_start_real_ = t_start_ + t_rest_init_;
             t_last_ = t_start_ + t_total_ - 1;
-            current_step_num_++;
+            //current_step_num_++;
         }
     }
     if (current_step_num_ == total_step_num_ - 1 && walking_tick_mj >= t_last_ + t_total_)
